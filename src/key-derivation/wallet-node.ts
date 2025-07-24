@@ -82,6 +82,10 @@ export class WalletNode {
     return new WalletNode(keyNode);
   }
 
+  static getMasterPublicKey(spendingPublicKey: [bigint, bigint], nullifyingKey: bigint): bigint {
+    return poseidon([...spendingPublicKey, nullifyingKey]);
+  }
+  
   /**
    * Get spending key-pair
    * @returns keypair
