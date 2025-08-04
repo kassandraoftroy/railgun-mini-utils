@@ -2,8 +2,9 @@
   "name": "railgun-mini-utils",
   "version": "0.0.1",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "mocha -r ts-node/register --extension ts \"src/**/__tests__/**/*.{ts,tsx}\"",
     "start": "ts-node src/index.ts"
   },
   "keywords": [],
@@ -12,9 +13,15 @@
   "description": "",
   "devDependencies": {
     "@types/buffer-xor": "^2.0.2",
+    "@types/chai": "^4.3.20",
+    "@types/chai-as-promised": "^7.1.8",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^24.1.0",
+    "chai": "^4.5.0",
+    "chai-as-promised": "^7.1.2",
+    "mocha": "^11.7.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.2"
   },
   "dependencies": {
     "@noble/ed25519": "^1.7.1",

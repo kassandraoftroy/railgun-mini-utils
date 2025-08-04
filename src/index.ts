@@ -1,8 +1,11 @@
-import { deriveNodes, WalletNode } from './key-derivation/wallet-node';
-import { encodeAddress, /*decodeAddress*/ } from './key-derivation/bech32';
+import { deriveNodes, WalletNode } from './railgun-lib/key-derivation/wallet-node';
+import { encodeAddress, /*decodeAddress*/ } from './railgun-lib/key-derivation/bech32';
 
 const MNEMONIC = 'test test test test test test test test test test test test';
 const ACCOUNT_INDEX = 0;
+const ACCOUNT_VERSION = 1;
+const ACCOUNT_CHAIN_ID = undefined;
+
 
 async function main() {
   const {spending, viewing} = deriveNodes(MNEMONIC, ACCOUNT_INDEX);
@@ -15,8 +18,8 @@ async function main() {
   const address = encodeAddress({
     masterPublicKey: masterPubkey,
     viewingPublicKey: viewingPubkey,
-    chain: undefined,
-    version: 1,
+    chain: ACCOUNT_CHAIN_ID,
+    version: ACCOUNT_VERSION,
   });
 
   console.log('address:', address);

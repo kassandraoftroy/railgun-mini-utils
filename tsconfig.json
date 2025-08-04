@@ -1,14 +1,19 @@
 {
+  "ts-node": {
+    "files": true
+  },
   "compilerOptions": {
-    "target": "ES2020",
+    "lib": ["ES2022", "DOM"],
+    "target": "ES2022",
     "module": "CommonJS",
     "moduleResolution": "node",
     "esModuleInterop": true,
+    "resolveJsonModule": true,
     "strict": true,
     "outDir": "dist",
     "rootDir": "src",
     "types": ["node"],
-    "typeRoots": ["./types", "./node_modules/@types"]
+    "typeRoots": ["src/types", "./node_modules/@types"]
   },
-  "include": ["src", "types"]
+  "include": ["src"]
 }
