@@ -12,6 +12,7 @@
   "license": "MIT",
   "description": "",
   "devDependencies": {
+    "@typechain/ethers-v6": "^0.5.1",
     "@types/buffer-xor": "^2.0.2",
     "@types/chai": "^4.3.20",
     "@types/chai-as-promised": "^7.1.8",
@@ -29,6 +30,7 @@
     "@railgun-community/curve25519-scalarmult-wasm": "0.1.5",
     "@railgun-community/poseidon-hash-wasm": "1.0.1",
     "buffer-xor": "^2.0.2",
+    "dotenv": "^17.2.1",
     "ethereum-cryptography": "^3.2.0",
     "ethers": "^6.13.1"
   }
