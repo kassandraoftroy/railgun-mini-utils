@@ -7,7 +7,7 @@ import { ByteUtils } from '../railgun-lib/utils/bytes';
 import { ShieldRequestStruct } from '../railgun-lib/abi/typechain/RailgunSmartWallet';
 import { getSharedSymmetricKey } from '../railgun-lib/utils/keys-utils';
 import { hexToBytes } from 'ethereum-cryptography/utils';
-import { poseidon } from '../railgun-lib/utils/poseidon';
+import { keccak256 } from 'ethereum-cryptography/keccak';
 
 const ACCOUNT_VERSION = 1;
 const ACCOUNT_CHAIN_ID = undefined;
@@ -50,8 +50,8 @@ export default class RailgunAccount {
     // TODO: this is made up, need to find canonical way.
     const msg = ShieldNoteERC20.getShieldPrivateKeySignatureMessage();
     const signature = await this.ethSigner.signMessage(msg);
-    const hashedSignature = poseidon([BigInt(signature)]);
-    return ByteUtils.hexStringToBytes(ByteUtils.nToHex(hashedSignature, 32, true));
+    const signatureBytes = ByteUtils.hexStringToBytes(signature);
+    return keccak256(signatureBytes);
   }
 
   async decryptShieldNoteRandomness(shieldNote: ShieldRequestStruct): Promise<string> {
