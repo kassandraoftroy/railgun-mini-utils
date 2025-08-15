@@ -1,7 +1,7 @@
 import { deriveNodes, WalletNode } from '../railgun-lib/key-derivation/wallet-node';
 import { encodeAddress } from '../railgun-lib/key-derivation/bech32';
 import { Mnemonic } from '../railgun-lib/key-derivation/bip39';
-import { JsonRpcProvider, Wallet } from 'ethers';
+import { Wallet } from 'ethers';
 import { ShieldNoteERC20 } from '../railgun-lib/note/erc20/shield-note-erc20';
 import { ByteUtils } from '../railgun-lib/utils/bytes';
 import { ShieldRequestStruct } from '../railgun-lib/abi/typechain/RailgunSmartWallet';
@@ -12,18 +12,38 @@ import { keccak256 } from 'ethereum-cryptography/keccak';
 const ACCOUNT_VERSION = 1;
 const ACCOUNT_CHAIN_ID = undefined;
 
+const getWalletNodeFromKey = (priv: string) => {
+  const wallet = new Wallet(priv);
+  return new WalletNode({chainKey: wallet.privateKey, chainCode: ''});
+};
+
 export default class RailgunAccount {
 
   private spending: WalletNode;
   private viewing: WalletNode;
-  private ethSigner: Wallet;
+  private ethSigner?: Wallet;
 
-  constructor(mnemonic: string, accountIndex: number, rpcUrl: string) {
+  constructor(spendingNode: WalletNode, viewingNode: WalletNode, ethSigner?: Wallet) {
+    this.spending = spendingNode;
+    this.viewing = viewingNode;
+    this.ethSigner = ethSigner;
+  }
+
+  static fromMnemonic(mnemonic: string, accountIndex: number): RailgunAccount {
     const {spending, viewing} = deriveNodes(mnemonic, accountIndex);
-    this.spending = spending;
-    this.viewing = viewing;
-    const provider = new JsonRpcProvider(rpcUrl);
-    this.ethSigner = new Wallet(Mnemonic.to0xPrivateKey(mnemonic, accountIndex), provider);
+    const ethSigner = new Wallet(Mnemonic.to0xPrivateKey(mnemonic, accountIndex));
+    return new RailgunAccount(spending, viewing, ethSigner);
+  }
+
+  static fromPrivateKeys(spendingKey: string, viewingKey: string, ethKey?: string): RailgunAccount {
+    const spendingNode = getWalletNodeFromKey(spendingKey);
+    const viewingNode = getWalletNodeFromKey(viewingKey);
+    const ethSigner = ethKey ? new Wallet(ethKey) : undefined;
+    return new RailgunAccount(spendingNode, viewingNode, ethSigner);
+  }
+
+  setEthSigner(ethSigner: Wallet) {
+    this.ethSigner = ethSigner;
   }
 
   async getRailgunAddress(): Promise<string> {
@@ -47,7 +67,9 @@ export default class RailgunAccount {
   }
 
   async getShieldPrivateKey(): Promise<Uint8Array> {
-    // TODO: this is made up, need to find canonical way.
+    if (!this.ethSigner) {
+      throw new Error('Eth signer not set');
+    }
     const msg = ShieldNoteERC20.getShieldPrivateKeySignatureMessage();
     const signature = await this.ethSigner.signMessage(msg);
     const signatureBytes = ByteUtils.hexStringToBytes(signature);
