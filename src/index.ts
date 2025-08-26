@@ -1,10 +1,10 @@
-import { RailgunAccount } from './wallet-utils';
+import { RailgunAccount } from './account-utils';
 import { ByteUtils } from './railgun-lib/utils/bytes';
 import dotenv from 'dotenv';
-import storedEvents from '../storedEvents.json';
-// import { Wallet, JsonRpcProvider } from 'ethers';
-// import fs from 'fs';
-
+import { /*Wallet,*/ JsonRpcProvider } from 'ethers';
+import cached from '../cached.json';
+import { Cache } from './account-utils/railgun-account';
+import fs from 'fs';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -35,17 +35,27 @@ async function main() {
   // const txHash = await railgunAccount.sendShieldNote(encodedShieldNote, txSigner);
   // console.log('tx:', txHash);
 
-  // 2. scan events
+  const provider = new JsonRpcProvider(RPC_URL);
 
-  // const startBlock = 9024458;
-  // const endBlock = 9026688;
-  // const provider = new JsonRpcProvider(RPC_URL);
-  // const events = await railgunAccount.scanShieldEvents(provider, startBlock, endBlock);
-  // console.log('shield events found:', events.length);
+  await railgunAccount.init();
 
-  const shieldEvents = storedEvents.events.shield;
-  console.log('shield events found:', shieldEvents.length);
-  console.log('example event:', shieldEvents[0]);
+  const toCache = await railgunAccount.sync(provider, [RailgunAccount.getERC20TokenData(TOKEN)], cached as unknown as Cache);
+  fs.writeFileSync('cached.json', JSON.stringify(toCache, null, 2));
+
+  console.log("number of cached receipts:", toCache.receipts.length);
+  console.log("last block:", toCache.endBlock);
+
+  const balance = await railgunAccount.getBalance(TOKEN);
+  console.log("balance:", balance);
+
+  const notes = await railgunAccount.getAllNotes();
+  console.log("number of notes:", notes.length);
+
+  const unspentNotes = await railgunAccount.getUnspentNotes(TOKEN);
+  console.log("number of unspent notes:", unspentNotes.length);
+
+  const tokens = await railgunAccount.getAllTokens();
+  console.log("number of tokens:", tokens.length);
 }
 
 main();

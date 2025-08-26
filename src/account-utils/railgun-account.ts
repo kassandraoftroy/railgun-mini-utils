@@ -1,7 +1,7 @@
 import { deriveNodes, WalletNode } from '../railgun-lib/key-derivation/wallet-node';
 import { encodeAddress } from '../railgun-lib/key-derivation/bech32';
 import { Mnemonic } from '../railgun-lib/key-derivation/bip39';
-import { Wallet, Contract, JsonRpcProvider, Interface } from 'ethers';
+import { Wallet, Contract, JsonRpcProvider, TransactionReceipt } from 'ethers';
 import { ShieldNoteERC20 } from '../railgun-lib/note/erc20/shield-note-erc20';
 import { ByteUtils } from '../railgun-lib/utils/bytes';
 import { ShieldRequestStruct } from '../railgun-lib/abi/typechain/RailgunSmartWallet';
@@ -9,34 +9,26 @@ import { getSharedSymmetricKey } from '../railgun-lib/utils/keys-utils';
 import { hexToBytes } from 'ethereum-cryptography/utils';
 import { keccak256 } from 'ethereum-cryptography/keccak';
 import { ABIRailgunSmartWallet } from '../railgun-lib/abi/abi';
+import { MerkleTree } from '../railgun-logic/logic/merkletree';
+import { Wallet as RailgunWallet } from '../railgun-logic/logic/wallet';
+import { Note, TokenData } from '../railgun-logic/logic/note';
 
 const ACCOUNT_VERSION = 1;
 const ACCOUNT_CHAIN_ID = undefined;
 const RAILGUN_ADDRESS = '0x942D5026b421cf2705363A525897576cFAdA5964';
+const GLOBAL_START_BLOCK = 4495479;
+
+export interface Cache {
+  receipts: TransactionReceipt[];
+  endBlock: number;
+}
 
 const getWalletNodeFromKey = (priv: string) => {
   const wallet = new Wallet(priv);
   return new WalletNode({chainKey: wallet.privateKey, chainCode: ''});
 };
 
-const getRailgunEventTopic = (eventName: string) => {
-  const eventAbi = ABIRailgunSmartWallet.find(
-    (item: any) => item.type === 'event' && item.name === eventName
-  );
-  if (!eventAbi) {
-    throw new Error('Event ABI not found');
-  }
-
-  // Build the event topic
-  const eventIface = new Interface([eventAbi]);
-  const event = eventIface.getEvent(eventName);
-  if (!event) {
-    throw new Error('Event not found');
-  }
-  return {iface: eventIface, topic: event.topicHash};
-}
-
-const getAllLogs = async (provider: JsonRpcProvider, topic: string, startBlock: number, endBlock: number) => {
+const getAllReceipts = async (provider: JsonRpcProvider, startBlock: number, endBlock: number) => {
   const BATCH_SIZE = 500;
   let allLogs: any[] = [];
   for (let from = startBlock; from <= endBlock; from += BATCH_SIZE) {
@@ -45,22 +37,32 @@ const getAllLogs = async (provider: JsonRpcProvider, topic: string, startBlock: 
       address: RAILGUN_ADDRESS,
       fromBlock: from,
       toBlock: to,
-      topics: [topic],
     });
     allLogs = allLogs.concat(logs);
   }
-  return allLogs;
+  const TXIDs = Array.from(new Set(allLogs.map(log => log.transactionHash)));
+  const receipts: TransactionReceipt[] = [];
+  for (const txID of TXIDs) {
+    const receipt = await provider.getTransactionReceipt(txID);
+    if (receipt) {
+      receipts.push(receipt);
+    }
+  }
+
+  return receipts;
 }
 
 export default class RailgunAccount {
 
-  private spending: WalletNode;
-  private viewing: WalletNode;
+  private spendingNode: WalletNode;
+  private viewingNode: WalletNode;
   private shieldKeyEthSigner?: Wallet;
+  private merkleTree?: MerkleTree;
+  private wallet?: RailgunWallet;
 
   constructor(spendingNode: WalletNode, viewingNode: WalletNode, ethSigner?: Wallet) {
-    this.spending = spendingNode;
-    this.viewing = viewingNode;
+    this.spendingNode = spendingNode;
+    this.viewingNode = viewingNode;
     this.shieldKeyEthSigner = ethSigner;
   }
 
@@ -77,12 +79,43 @@ export default class RailgunAccount {
     return new RailgunAccount(spendingNode, viewingNode, ethSigner);
   }
 
-  setShieldKeyEthSigner(ethSigner: Wallet) {
-    this.shieldKeyEthSigner = ethSigner;
+  setShieldKeyEthSigner(ethKey: string) {
+    this.shieldKeyEthSigner = new Wallet(ethKey);
+  }
+
+  async init() {
+    const {privateKey: viewingKey} = await this.viewingNode.getViewingKeyPair();
+    const {privateKey: spendingKey} = this.spendingNode.getSpendingKeyPair();
+    this.merkleTree = await MerkleTree.createTree();
+    this.wallet = new RailgunWallet(spendingKey, viewingKey);
+  }
+
+  async sync(provider: JsonRpcProvider, tokens: TokenData[], cached?: Cache) {
+    if (!this.wallet || !this.merkleTree) {
+      throw new Error('not initialized');
+    }
+
+    const startBlock = cached ? cached.endBlock : GLOBAL_START_BLOCK;
+    const endBlock = await provider.getBlockNumber();
+
+    const newReceipts = await getAllReceipts(provider, startBlock, endBlock);
+    const receipts = cached ? Array.from(new Set(cached.receipts.concat(newReceipts))) : newReceipts;
+
+    this.wallet.addTokens(tokens);
+
+    for (const receipt of receipts) {
+      await this.wallet.scanTX(receipt, RAILGUN_ADDRESS);
+      await this.merkleTree.scanTX(receipt, RAILGUN_ADDRESS);
+    }
+
+    return {
+      receipts,
+      endBlock: endBlock,
+    };
   }
 
   async getRailgunAddress(): Promise<string> {
-    const {pubkey: viewingPubkey} = await this.viewing.getViewingKeyPair();
+    const {pubkey: viewingPubkey} = await this.viewingNode.getViewingKeyPair();
     const masterPubkey = await this.getMasterPublicKey();
     
     const address = encodeAddress({
@@ -96,8 +129,8 @@ export default class RailgunAccount {
   }
 
   async getMasterPublicKey(): Promise<bigint> {
-    const {pubkey: spendingPubkey} = this.spending.getSpendingKeyPair();
-    const nullifyingKey = await this.viewing.getNullifyingKey();
+    const {pubkey: spendingPubkey} = this.spendingNode.getSpendingKeyPair();
+    const nullifyingKey = await this.viewingNode.getNullifyingKey();
     return WalletNode.getMasterPublicKey(spendingPubkey, nullifyingKey);
   }
 
@@ -114,7 +147,7 @@ export default class RailgunAccount {
   async decryptShieldNoteRandomness(shieldNote: ShieldRequestStruct): Promise<string> {
     const bundle = shieldNote.ciphertext.encryptedBundle.map(String) as [string, string, string];
     const shieldKey = String(shieldNote.ciphertext.shieldKey);
-    const {privateKey: viewingPrivateKey} = await this.viewing.getViewingKeyPair();
+    const {privateKey: viewingPrivateKey} = await this.viewingNode.getViewingKeyPair();
 
     const sharedKey = await getSharedSymmetricKey(viewingPrivateKey, hexToBytes(shieldKey));
     if (!sharedKey) {
@@ -124,19 +157,19 @@ export default class RailgunAccount {
   }
 
   async getEncodedShieldNote(token: string, value: bigint, random: string): Promise<ShieldRequestStruct> {
-    const shieldNote = await this.getShieldNote(token, value, random);
+    const shieldNote = await this.createShieldNote(token, value, random);
     const request = await this.encodeShieldNote(shieldNote);
     return request;
   }
 
-  async getShieldNote(token: string, value: bigint, random: string): Promise<ShieldNoteERC20> {
+  async createShieldNote(token: string, value: bigint, random: string): Promise<ShieldNoteERC20> {
     const masterPubkey = await this.getMasterPublicKey();
     return new ShieldNoteERC20(masterPubkey, random, value, token);
   }
 
   async encodeShieldNote(shieldNote: ShieldNoteERC20): Promise<ShieldRequestStruct> {
     const shieldPrivateKey = await this.getShieldPrivateKey();
-    const {pubkey: viewingPubkey} = await this.viewing.getViewingKeyPair();
+    const {pubkey: viewingPubkey} = await this.viewingNode.getViewingKeyPair();
     return shieldNote.serialize(shieldPrivateKey, viewingPubkey);
   }
 
@@ -146,103 +179,50 @@ export default class RailgunAccount {
     return tx.hash;
   }
 
-  async scanShieldEvents(
-    provider: JsonRpcProvider,
-    startBlock: number,
-    endBlock: number
-  ): Promise<
-    Array<{
-      treeNumber: bigint;
-      startPosition: bigint;
-      commitments: any[];
-      shieldCiphertext: any[];
-      fees: bigint[];
-      event: any;
-    }>
-  > {
-    const {iface, topic} = getRailgunEventTopic('Shield');
-
-    const logs = await getAllLogs(provider, topic, startBlock, endBlock);
-
-    const results = [];
-    for (const log of logs) {
-      const parsed = iface.parseLog(log);
-      if (!parsed) {
-        continue;
-      }
-      results.push({
-        treeNumber: parsed.args.treeNumber,
-        startPosition: parsed.args.startPosition,
-        commitments: parsed.args.commitments,
-        shieldCiphertext: parsed.args.shieldCiphertext,
-        fees: parsed.args.fees,
-        event: log,
-      });
+  async getBalance(token: string): Promise<bigint> {
+    if (!this.wallet || !this.merkleTree) {
+      throw new Error('not initialized');
     }
-    return results;
+    const tokenData = {
+      tokenType: 0,
+      tokenAddress: token,
+      tokenSubID: 0n,
+    };
+    return this.wallet.getBalance(this.merkleTree, tokenData);
   }
 
-  async scanNullifiedEvents(
-    provider: JsonRpcProvider,
-    startBlock: number,
-    endBlock: number
-  ): Promise<
-    Array<{
-      treeNumber: bigint;
-      nullifier: string[];
-      event: any;
-    }>
-  > {
-    const {iface, topic} = getRailgunEventTopic('Nullified');
-
-    const logs = await getAllLogs(provider, topic, startBlock, endBlock);
-
-    const results = [];
-    for (const log of logs) {
-      const parsed = iface.parseLog(log);
-      if (!parsed) {
-        continue;
-      }
-      results.push({
-        treeNumber: parsed.args.treeNumber,
-        nullifier: parsed.args.nullifier,
-        event: log,
-      });
+  async getAllNotes(): Promise<Note[]> {
+    if (!this.wallet || !this.merkleTree) {
+      throw new Error('not initialized');
     }
-    return results;
+    return this.wallet.notes;
   }
 
-  async scanTransactEvents(
-    provider: JsonRpcProvider,
-    startBlock: number,
-    endBlock: number
-  ): Promise<
-    Array<{
-      treeNumber: bigint;
-      startPosition: bigint;
-      hash: string[];
-      ciphertext: any[];
-      event: any;
-    }>
-  > {
-    const {iface, topic} = getRailgunEventTopic('Transact');
-
-    const logs = await getAllLogs(provider, topic, startBlock, endBlock);
-
-    const results = [];
-    for (const log of logs) {
-      const parsed = iface.parseLog(log);
-      if (!parsed) {
-        continue;
-      }
-      results.push({
-        treeNumber: parsed.args.treeNumber,
-        startPosition: parsed.args.startPosition,
-        hash: parsed.args.hash,
-        ciphertext: parsed.args.ciphertext,
-        event: log,
-      });
+  async getUnspentNotes(token: string): Promise<Note[]> {
+    if (!this.wallet || !this.merkleTree) {
+      throw new Error('not initialized');
     }
-    return results;
+    const tokenData = {
+      tokenType: 0,
+      tokenAddress: token,
+      tokenSubID: 0n,
+    };
+    return this.wallet.getUnspentNotes(this.merkleTree, tokenData);
+  }
+
+  async getAllTokens(): Promise<TokenData[]> {
+    if (!this.wallet) {
+      throw new Error('not initialized');
+    }
+    return this.wallet.tokens;
+  }
+
+  static getERC20TokenData(token: string): TokenData {
+    const tokenData = {
+      tokenType: 0,
+      tokenAddress: token,
+      tokenSubID: 0n,
+    };
+    return tokenData;
   }
 }
