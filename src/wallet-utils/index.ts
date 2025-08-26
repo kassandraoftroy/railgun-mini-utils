@@ -1,1 +1,0 @@
-export { default as RailgunAccount } from './railgun-account';
