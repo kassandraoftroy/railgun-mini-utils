@@ -7,12 +7,12 @@ import { Cache } from './account-utils/railgun-account';
 
 // load environment variables from .env file
 dotenv.config();
-const MNEMONIC = process.env.MNEMONIC || 'test test test test test test test test test test test test';
+const MNEMONIC = process.env.MNEMONIC || 'test test test test test test test test test test test junk';
 const ACCOUNT_INDEX = Number(process.env.ACCOUNT_INDEX) || 0;
 const RPC_URL = process.env.RPC_URL || '';
 const TX_SIGNER_KEY = process.env.TX_SIGNER_KEY || '';
 
-const TOKEN = '0x97a36608DA67AF0A79e50cb6343f86F340B3b49e'; // weth
+const TOKEN = '0x97a36608DA67AF0A79e50cb6343f86F340B3b49e'; // WETH
 const VALUE = 10000000000000n; // 0.00001 ETH
 
 async function main() {

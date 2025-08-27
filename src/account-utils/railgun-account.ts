@@ -168,9 +168,9 @@ export default class RailgunAccount {
     return request;
   }
 
-  async submitShieldTx(shieldNote: ShieldRequestStruct, signer: Wallet, options?: TransactionRequest): Promise<string> {
+  async submitShieldTx(shieldNote: ShieldRequestStruct, signer: Wallet): Promise<string> {
     const contract = new Contract(RAILGUN_ADDRESS, ABIRailgunSmartWallet, signer);
-    const tx = await contract.shield([shieldNote], options);
+    const tx = await contract.shield([shieldNote]);
     return tx.hash;
   }
 
@@ -220,9 +220,9 @@ export default class RailgunAccount {
     return txParams;
   }
 
-  async submitTransactTx(inputs: PublicInputs[], signer: Wallet, options?: TransactionRequest): Promise<string> {
+  async submitTransactTx(inputs: PublicInputs[], signer: Wallet): Promise<string> {
     const contract = new Contract(RAILGUN_ADDRESS, ABIRailgunSmartWallet, signer);
-    const tx = await contract.transact(inputs, options);
+    const tx = await contract.transact(inputs);
     return tx.hash;
   }
 
