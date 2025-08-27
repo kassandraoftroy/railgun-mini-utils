@@ -49,7 +49,7 @@ async function main() {
   // acquire WETH and approve WETH
   const tokenContract = new Contract(TOKEN, ["function approve(address, uint256) external returns(bool)", "function deposit() external payable"], txSigner);
   const depositTx = await tokenContract.deposit({value: VALUE});
-  console.log("wrap eth tx:", depositTx.hash);
+  console.log("wrap ETH tx:", depositTx.hash);
   await provider.waitForTransaction(depositTx.hash);
 
   const approveTx = await tokenContract.approve(RAILGUN_ADDRESS, VALUE);
