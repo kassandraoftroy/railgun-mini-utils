@@ -42,8 +42,6 @@ class Wallet {
 
   notes: Note[] = [];
 
-  tokens: TokenData[] = [];
-
   /**
    * Railgun Wallet
    *
@@ -125,39 +123,33 @@ class Wallet {
 
             // Loop through each token we're scanning
             await Promise.all(
-              this.tokens.map((token) =>
-                Promise.all(
-                  // Loop through every note and try to decrypt as token
-                  args.ciphertext.map(async (ciphertext, index) => {
-                    // Attempt to decrypt note with token
-                    const note = await Note.decrypt(
-                      hexStringToArray(args.hash[index]),
-                      {
-                        ciphertext: [
-                          hexStringToArray(ciphertext.ciphertext[0]),
-                          hexStringToArray(ciphertext.ciphertext[1]),
-                          hexStringToArray(ciphertext.ciphertext[2]),
-                          hexStringToArray(ciphertext.ciphertext[3]),
-                        ],
-                        blindedSenderViewingKey: hexStringToArray(
-                          ciphertext.blindedSenderViewingKey,
-                        ),
-                        blindedReceiverViewingKey: hexStringToArray(
-                          ciphertext.blindedReceiverViewingKey,
-                        ),
-                        annotationData: hexStringToArray(ciphertext.annotationData),
-                        memo: hexStringToArray(ciphertext.memo),
-                      },
-                      this.viewingKey,
-                      this.spendingKey,
-                      token,
-                    );
+              // Loop through every note and try to decrypt as token
+              args.ciphertext.map(async (ciphertext, index) => {
+                // Attempt to decrypt note with token
+                const note = await Note.decrypt(
+                  {
+                    ciphertext: [
+                      hexStringToArray(ciphertext.ciphertext[0]),
+                      hexStringToArray(ciphertext.ciphertext[1]),
+                      hexStringToArray(ciphertext.ciphertext[2]),
+                      hexStringToArray(ciphertext.ciphertext[3]),
+                    ],
+                    blindedSenderViewingKey: hexStringToArray(
+                      ciphertext.blindedSenderViewingKey,
+                    ),
+                    blindedReceiverViewingKey: hexStringToArray(
+                      ciphertext.blindedReceiverViewingKey,
+                    ),
+                    annotationData: hexStringToArray(ciphertext.annotationData),
+                    memo: hexStringToArray(ciphertext.memo),
+                  },
+                  this.viewingKey,
+                  this.spendingKey,
+                );
 
-                    // If note was decrypted add to wallet
-                    if (note) this.notes[startPosition + index] = note;
-                  }),
-                ),
-              ),
+                // If note was decrypted add to wallet
+                if (note) this.notes[startPosition + index] = note;
+              }),
             );
           }
         }
@@ -274,10 +266,6 @@ class Wallet {
 
     // Map reduce sum values, default to 0 in no notes
     return unspentNotes.map((note) => note.value).reduce((left, right) => left + right, 0n);
-  }
-
-  addTokens(tokens: TokenData[]) {
-    this.tokens = Array.from(new Set(this.tokens.concat(tokens)));
   }
 }
 

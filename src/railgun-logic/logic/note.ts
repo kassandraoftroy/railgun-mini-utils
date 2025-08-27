@@ -403,20 +403,15 @@ class Note {
   /**
    * Decrypts note from encrypted bundle
    *
-   * @param expectedHash - expected hash of note
    * @param encrypted - encrypted commitment bundle
    * @param viewingKey - viewing private key to try decrypting for
    * @param spendingKey - spending private key to use in decrypted note
-   * @param tokenData - token data to use in decrypted note
-   * @returns decrypted note or undefined if decryption failed,
-   * spender key doesn't match, or token data doesn't match
+   * @returns decrypted note or undefined if decryption failed
    */
   static async decrypt(
-    expectedHash: Uint8Array,
     encrypted: CommitmentCiphertext,
     viewingKey: Uint8Array,
     spendingKey: Uint8Array,
-    tokenData: TokenData,
   ): Promise<Note | undefined> {
     // Reconstruct encrypted shared bundle
     const encryptedSharedBundle: Uint8Array[] = [...encrypted.ciphertext, encrypted.memo];
@@ -437,6 +432,9 @@ class Note {
     // Decode memo
     const memo = sharedBundle.length > 3 ? new TextDecoder().decode(sharedBundle[3]) : '';
 
+    // Decode tokenData
+    const tokenData = sharedBundle[2].length >= 96 ? {tokenType: Number(arrayToBigInt(sharedBundle[2].slice(0, 32)).toString()), tokenAddress: arrayToHexString(sharedBundle[2].slice(44, 64), true), tokenSubID: arrayToBigInt(sharedBundle[2].slice(64, 96))} : {tokenType: 0, tokenAddress: arrayToHexString(sharedBundle[2].slice(12, 32), true), tokenSubID: BigInt(0)};
+
     // Construct note
     const note = new Note(
       spendingKey,
@@ -447,12 +445,7 @@ class Note {
       memo.replace(/\u0000/g, ''),
     );
 
-    // If hash matches return note
-    if (arrayToHexString(await note.getHash(), false) === arrayToHexString(expectedHash, false))
-      return note;
-
-    // Return undefined if hash doesn't match
-    return undefined;
+    return note;
   }
 }
 

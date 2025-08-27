@@ -1,4 +1,3 @@
-// !EDIT: update ethers import to use ethers package
 import { AbiCoder } from 'ethers';
 import { ProofBundle, prove, SolidityProof } from './prover';
 import {
@@ -100,7 +99,6 @@ const dummyProof: ProofBundle = {
  */
 function hashBoundParams(boundParams: BoundParams): Uint8Array {
   // Encode bytes
-  // !EDIT: invoke defaultAbiCoder differently with ethers v6
   const encodedBytes = hexStringToArray(
     AbiCoder.defaultAbiCoder().encode(
       [
@@ -581,6 +579,7 @@ async function transact(
 
   // Generate proof
   const proof = await prove(artifact, inputs);
+
 
   // Return public inputs
   return formatPublicInputs(
