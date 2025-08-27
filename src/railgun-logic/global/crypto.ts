@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import * as nobleED25519 from '@noble/ed25519';
-// !EDIT: slight update of sha2 imports
 import { sha256, sha512 } from '@noble/hashes/sha2';
 import { keccak_256, keccak_512 } from '@noble/hashes/sha3';
 import { buildEddsa, buildPoseidonOpt } from 'circomlibjs';

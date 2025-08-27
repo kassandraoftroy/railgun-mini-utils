@@ -10,13 +10,15 @@ import { hexToBytes } from 'ethereum-cryptography/utils';
 import { keccak256 } from 'ethereum-cryptography/keccak';
 import { ABIRailgunSmartWallet } from '../railgun-lib/abi/abi';
 import { MerkleTree } from '../railgun-logic/logic/merkletree';
-import { Wallet as RailgunWallet } from '../railgun-logic/logic/wallet';
-import { Note, TokenData } from '../railgun-logic/logic/note';
+import { Wallet as NoteBook } from '../railgun-logic/logic/wallet';
+import { Note, TokenData, UnshieldNote } from '../railgun-logic/logic/note';
+import { transact, PublicInputs } from '../railgun-logic/logic/transaction';
 
 const ACCOUNT_VERSION = 1;
 const ACCOUNT_CHAIN_ID = undefined;
-const RAILGUN_ADDRESS = '0x942D5026b421cf2705363A525897576cFAdA5964';
+export const RAILGUN_ADDRESS = '0x942D5026b421cf2705363A525897576cFAdA5964';
 const GLOBAL_START_BLOCK = 4495479;
+const CHAIN_ID = BigInt(11155111);
 
 export interface Cache {
   receipts: TransactionReceipt[];
@@ -58,7 +60,7 @@ export default class RailgunAccount {
   private viewingNode: WalletNode;
   private shieldKeyEthSigner?: Wallet;
   private merkleTree?: MerkleTree;
-  private wallet?: RailgunWallet;
+  private noteBook?: NoteBook;
 
   constructor(spendingNode: WalletNode, viewingNode: WalletNode, ethSigner?: Wallet) {
     this.spendingNode = spendingNode;
@@ -87,30 +89,28 @@ export default class RailgunAccount {
     const {privateKey: viewingKey} = await this.viewingNode.getViewingKeyPair();
     const {privateKey: spendingKey} = this.spendingNode.getSpendingKeyPair();
     this.merkleTree = await MerkleTree.createTree();
-    this.wallet = new RailgunWallet(spendingKey, viewingKey);
+    this.noteBook = new NoteBook(spendingKey, viewingKey);
   }
 
-  async sync(provider: JsonRpcProvider, tokens: TokenData[], cached?: Cache) {
-    if (!this.wallet || !this.merkleTree) {
+  async sync(provider: JsonRpcProvider, startBlock: number = GLOBAL_START_BLOCK, cached?: Cache) {
+    if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
 
-    const startBlock = cached ? cached.endBlock : GLOBAL_START_BLOCK;
+    const startingBlock = cached ? cached.endBlock : startBlock;
     const endBlock = await provider.getBlockNumber();
 
-    const newReceipts = await getAllReceipts(provider, startBlock, endBlock);
+    const newReceipts = await getAllReceipts(provider, startingBlock, endBlock);
     const receipts = cached ? Array.from(new Set(cached.receipts.concat(newReceipts))) : newReceipts;
 
-    this.wallet.addTokens(tokens);
-
     for (const receipt of receipts) {
-      await this.wallet.scanTX(receipt, RAILGUN_ADDRESS);
+      await this.noteBook.scanTX(receipt, RAILGUN_ADDRESS);
       await this.merkleTree.scanTX(receipt, RAILGUN_ADDRESS);
     }
 
     return {
       receipts,
-      endBlock: endBlock,
+      endBlock
     };
   }
 
@@ -156,15 +156,15 @@ export default class RailgunAccount {
     return ShieldNoteERC20.decryptRandom(bundle, sharedKey);
   }
 
-  async getEncodedShieldNote(token: string, value: bigint, random: string): Promise<ShieldRequestStruct> {
-    const shieldNote = await this.createShieldNote(token, value, random);
+  async getEncodedShieldNote(token: string, value: bigint): Promise<ShieldRequestStruct> {
+    const shieldNote = await this.createShieldNote(token, value);
     const request = await this.encodeShieldNote(shieldNote);
     return request;
   }
 
-  async createShieldNote(token: string, value: bigint, random: string): Promise<ShieldNoteERC20> {
+  async createShieldNote(token: string, value: bigint): Promise<ShieldNoteERC20> {
     const masterPubkey = await this.getMasterPublicKey();
-    return new ShieldNoteERC20(masterPubkey, random, value, token);
+    return new ShieldNoteERC20(masterPubkey, ByteUtils.randomHex(16), value, token);
   }
 
   async encodeShieldNote(shieldNote: ShieldNoteERC20): Promise<ShieldRequestStruct> {
@@ -179,8 +179,14 @@ export default class RailgunAccount {
     return tx.hash;
   }
 
+  async sendTransact(input: PublicInputs, signer: Wallet): Promise<string> {
+    const contract = new Contract(RAILGUN_ADDRESS, ABIRailgunSmartWallet, signer);
+    const tx = await contract.transact([input]);
+    return tx.hash;
+  }
+
   async getBalance(token: string): Promise<bigint> {
-    if (!this.wallet || !this.merkleTree) {
+    if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
     const tokenData = {
@@ -188,18 +194,69 @@ export default class RailgunAccount {
       tokenAddress: token,
       tokenSubID: 0n,
     };
-    return this.wallet.getBalance(this.merkleTree, tokenData);
+    return this.noteBook.getBalance(this.merkleTree, tokenData);
+  }
+
+  async createUnshieldTx(token: string, value: bigint, unshieldAddress: string): Promise<PublicInputs> {
+    if (!this.noteBook || !this.merkleTree) {
+      throw new Error('not initialized');
+    }
+
+    const unspentNotes = await this.getUnspentNotes(token);
+
+    let totalValue = 0n;
+    let notesIn: Note[] = [];
+    for (const note of unspentNotes) {
+      totalValue += note.value;
+      notesIn.push(note);
+      if (totalValue >= value) {
+        break;
+      }
+    }
+
+    if (totalValue < value) {
+      throw new Error('insufficient value in unspent notes');
+    }
+
+    const tokenData = {
+      tokenType: 0,
+      tokenAddress: token,
+      tokenSubID: 0n,
+    };
+
+    const leftover = totalValue - value;
+    const outputNotes: (Note | UnshieldNote)[] = [];
+    if (leftover > 0n) { 
+      const changeNote = new Note(this.noteBook.spendingKey, this.noteBook.viewingKey, leftover, ByteUtils.hexStringToBytes(ByteUtils.randomHex(16)), tokenData, '');
+      outputNotes.push(changeNote);
+    }
+
+    outputNotes.push(new UnshieldNote(unshieldAddress, value, tokenData));
+
+    const txParams = await transact(
+      this.merkleTree,
+      BigInt(0), // min gas price
+      1, // unshield type
+      CHAIN_ID,
+      '0x0000000000000000000000000000000000000000', // adapt contract
+      new Uint8Array([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]), // adapt params
+      notesIn,
+      outputNotes,
+    );
+
+    return txParams;
+
   }
 
   async getAllNotes(): Promise<Note[]> {
-    if (!this.wallet || !this.merkleTree) {
+    if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
-    return this.wallet.notes;
+    return this.noteBook.notes;
   }
 
   async getUnspentNotes(token: string): Promise<Note[]> {
-    if (!this.wallet || !this.merkleTree) {
+    if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
     const tokenData = {
@@ -207,14 +264,7 @@ export default class RailgunAccount {
       tokenAddress: token,
       tokenSubID: 0n,
     };
-    return this.wallet.getUnspentNotes(this.merkleTree, tokenData);
-  }
-
-  async getAllTokens(): Promise<TokenData[]> {
-    if (!this.wallet) {
-      throw new Error('not initialized');
-    }
-    return this.wallet.tokens;
+    return this.noteBook.getUnspentNotes(this.merkleTree, tokenData);
   }
 
   static getERC20TokenData(token: string): TokenData {
@@ -224,5 +274,12 @@ export default class RailgunAccount {
       tokenSubID: 0n,
     };
     return tokenData;
+  }
+
+  getMerkleRoot() {
+    if (!this.merkleTree) {
+      throw new Error('not initialized');
+    }
+    return this.merkleTree.root;
   }
 }

@@ -48,6 +48,7 @@ function formatProof(proof: SnarkjsProof): SolidityProof {
  */
 async function prove(artifact: Artifact, inputs: unknown): Promise<ProofBundle> {
   const { proof } = await groth16.fullProve(inputs, artifact.wasm, artifact.zkey);
+
   return {
     javascript: proof,
     solidity: formatProof(proof),
