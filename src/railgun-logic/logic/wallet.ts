@@ -72,6 +72,7 @@ class Wallet {
    * @returns complete
    */
   async scanTX(transaction: TransactionReceipt, contractAddress: string) {
+    // KASS TODO: also scan legacy events !!!
     // Loop through each log and parse
     await Promise.all(
       transaction.logs.map(async (log) => {

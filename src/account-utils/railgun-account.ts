@@ -1,12 +1,10 @@
 import { deriveNodes, WalletNode } from '../railgun-lib/key-derivation/wallet-node';
 import { encodeAddress } from '../railgun-lib/key-derivation/bech32';
 import { Mnemonic } from '../railgun-lib/key-derivation/bip39';
-import { Wallet, Contract, JsonRpcProvider, TransactionReceipt } from 'ethers';
+import { Wallet, Contract, JsonRpcProvider, TransactionReceipt, TransactionRequest } from 'ethers';
 import { ShieldNoteERC20 } from '../railgun-lib/note/erc20/shield-note-erc20';
 import { ByteUtils } from '../railgun-lib/utils/bytes';
 import { ShieldRequestStruct } from '../railgun-lib/abi/typechain/RailgunSmartWallet';
-import { getSharedSymmetricKey } from '../railgun-lib/utils/keys-utils';
-import { hexToBytes } from 'ethereum-cryptography/utils';
 import { keccak256 } from 'ethereum-cryptography/keccak';
 import { ABIRailgunSmartWallet } from '../railgun-lib/abi/abi';
 import { MerkleTree } from '../railgun-logic/logic/merkletree';
@@ -54,6 +52,15 @@ const getAllReceipts = async (provider: JsonRpcProvider, startBlock: number, end
   return receipts;
 }
 
+export const getERC20TokenData = (token: string): TokenData => {
+  const tokenData = {
+    tokenType: 0,
+    tokenAddress: token,
+    tokenSubID: 0n,
+  };
+  return tokenData;
+}
+
 export default class RailgunAccount {
 
   private spendingNode: WalletNode;
@@ -92,12 +99,12 @@ export default class RailgunAccount {
     this.noteBook = new NoteBook(spendingKey, viewingKey);
   }
 
-  async sync(provider: JsonRpcProvider, startBlock: number = GLOBAL_START_BLOCK, cached?: Cache) {
+  async sync(provider: JsonRpcProvider, startBlock: number, cached?: Cache) {
     if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
 
-    const startingBlock = cached ? cached.endBlock : startBlock;
+    const startingBlock = cached ? cached.endBlock : startBlock > GLOBAL_START_BLOCK ? startBlock : GLOBAL_START_BLOCK;
     const endBlock = await provider.getBlockNumber();
 
     const newReceipts = await getAllReceipts(provider, startingBlock, endBlock);
@@ -144,25 +151,7 @@ export default class RailgunAccount {
     return keccak256(signatureBytes);
   }
 
-  async decryptShieldNoteRandomness(shieldNote: ShieldRequestStruct): Promise<string> {
-    const bundle = shieldNote.ciphertext.encryptedBundle.map(String) as [string, string, string];
-    const shieldKey = String(shieldNote.ciphertext.shieldKey);
-    const {privateKey: viewingPrivateKey} = await this.viewingNode.getViewingKeyPair();
-
-    const sharedKey = await getSharedSymmetricKey(viewingPrivateKey, hexToBytes(shieldKey));
-    if (!sharedKey) {
-      throw new Error('Failed to get shared key');
-    }
-    return ShieldNoteERC20.decryptRandom(bundle, sharedKey);
-  }
-
-  async getEncodedShieldNote(token: string, value: bigint): Promise<ShieldRequestStruct> {
-    const shieldNote = await this.createShieldNote(token, value);
-    const request = await this.encodeShieldNote(shieldNote);
-    return request;
-  }
-
-  async createShieldNote(token: string, value: bigint): Promise<ShieldNoteERC20> {
+  async buildShieldNote(token: string, value: bigint): Promise<ShieldNoteERC20> {
     const masterPubkey = await this.getMasterPublicKey();
     return new ShieldNoteERC20(masterPubkey, ByteUtils.randomHex(16), value, token);
   }
@@ -173,31 +162,19 @@ export default class RailgunAccount {
     return shieldNote.serialize(shieldPrivateKey, viewingPubkey);
   }
 
-  async sendShieldNote(shieldNote: ShieldRequestStruct, signer: Wallet): Promise<string> {
+  async createShieldTx(token: string, value: bigint): Promise<ShieldRequestStruct> {
+    const shieldNote = await this.buildShieldNote(token, value);
+    const request = await this.encodeShieldNote(shieldNote);
+    return request;
+  }
+
+  async submitShieldTx(shieldNote: ShieldRequestStruct, signer: Wallet): Promise<string> {
     const contract = new Contract(RAILGUN_ADDRESS, ABIRailgunSmartWallet, signer);
     const tx = await contract.shield([shieldNote]);
     return tx.hash;
   }
 
-  async sendTransact(input: PublicInputs, signer: Wallet): Promise<string> {
-    const contract = new Contract(RAILGUN_ADDRESS, ABIRailgunSmartWallet, signer);
-    const tx = await contract.transact([input]);
-    return tx.hash;
-  }
-
-  async getBalance(token: string): Promise<bigint> {
-    if (!this.noteBook || !this.merkleTree) {
-      throw new Error('not initialized');
-    }
-    const tokenData = {
-      tokenType: 0,
-      tokenAddress: token,
-      tokenSubID: 0n,
-    };
-    return this.noteBook.getBalance(this.merkleTree, tokenData);
-  }
-
-  async createUnshieldTx(token: string, value: bigint, unshieldAddress: string): Promise<PublicInputs> {
+  async createUnshieldTx(token: string, value: bigint, unshieldAddress: string, minGasPrice?: bigint): Promise<PublicInputs> {
     if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
@@ -218,11 +195,7 @@ export default class RailgunAccount {
       throw new Error('insufficient value in unspent notes');
     }
 
-    const tokenData = {
-      tokenType: 0,
-      tokenAddress: token,
-      tokenSubID: 0n,
-    };
+    const tokenData = getERC20TokenData(token);
 
     const leftover = totalValue - value;
     const outputNotes: (Note | UnshieldNote)[] = [];
@@ -235,7 +208,7 @@ export default class RailgunAccount {
 
     const txParams = await transact(
       this.merkleTree,
-      BigInt(0), // min gas price
+      minGasPrice ? minGasPrice : BigInt(0), // min gas price
       1, // unshield type
       CHAIN_ID,
       '0x0000000000000000000000000000000000000000', // adapt contract
@@ -245,7 +218,20 @@ export default class RailgunAccount {
     );
 
     return txParams;
+  }
 
+  async submitTransactTx(inputs: PublicInputs[], signer: Wallet): Promise<string> {
+    const contract = new Contract(RAILGUN_ADDRESS, ABIRailgunSmartWallet, signer);
+    const tx = await contract.transact(inputs);
+    return tx.hash;
+  }
+
+  async getBalance(token: string): Promise<bigint> {
+    if (!this.noteBook || !this.merkleTree) {
+      throw new Error('not initialized');
+    }
+    const tokenData = getERC20TokenData(token);
+    return this.noteBook.getBalance(this.merkleTree, tokenData);
   }
 
   async getAllNotes(): Promise<Note[]> {
@@ -259,21 +245,8 @@ export default class RailgunAccount {
     if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
-    const tokenData = {
-      tokenType: 0,
-      tokenAddress: token,
-      tokenSubID: 0n,
-    };
+    const tokenData = getERC20TokenData(token);
     return this.noteBook.getUnspentNotes(this.merkleTree, tokenData);
-  }
-
-  static getERC20TokenData(token: string): TokenData {
-    const tokenData = {
-      tokenType: 0,
-      tokenAddress: token,
-      tokenSubID: 0n,
-    };
-    return tokenData;
   }
 
   getMerkleRoot() {
