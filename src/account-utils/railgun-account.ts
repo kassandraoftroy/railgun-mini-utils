@@ -1,12 +1,12 @@
 import { deriveNodes, WalletNode } from '../railgun-lib/key-derivation/wallet-node';
 import { encodeAddress } from '../railgun-lib/key-derivation/bech32';
 import { Mnemonic } from '../railgun-lib/key-derivation/bip39';
-import { Wallet, Contract, JsonRpcProvider, TransactionReceipt, TransactionRequest } from 'ethers';
+import { Wallet, Contract, JsonRpcProvider, TransactionReceipt, Interface } from 'ethers';
 import { ShieldNoteERC20 } from '../railgun-lib/note/erc20/shield-note-erc20';
 import { ByteUtils } from '../railgun-lib/utils/bytes';
 import { ShieldRequestStruct } from '../railgun-lib/abi/typechain/RailgunSmartWallet';
 import { keccak256 } from 'ethereum-cryptography/keccak';
-import { ABIRailgunSmartWallet } from '../railgun-lib/abi/abi';
+import { ABIRailgunSmartWallet, ABIRelayAdapt } from '../railgun-lib/abi/abi';
 import { MerkleTree } from '../railgun-logic/logic/merkletree';
 import { Wallet as NoteBook } from '../railgun-logic/logic/wallet';
 import { Note, TokenData, UnshieldNote } from '../railgun-logic/logic/note';
@@ -15,8 +15,11 @@ import { transact, PublicInputs } from '../railgun-logic/logic/transaction';
 const ACCOUNT_VERSION = 1;
 const ACCOUNT_CHAIN_ID = undefined;
 export const RAILGUN_ADDRESS = '0x942D5026b421cf2705363A525897576cFAdA5964';
-const GLOBAL_START_BLOCK = 4495479;
-const CHAIN_ID = BigInt(11155111);
+export const GLOBAL_START_BLOCK = 4495479;
+export const CHAIN_ID = BigInt(11155111);
+export const RELAY_ADAPT_ADDRESS = '0x66af65bfff9e384796a56f3fa3709b9d5d9d7083';
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+export const WETH = '0x97a36608DA67AF0A79e50cb6343f86F340B3b49e';
 
 export interface Cache {
   receipts: TransactionReceipt[];
@@ -59,6 +62,67 @@ export const getERC20TokenData = (token: string): TokenData => {
     tokenSubID: 0n,
   };
   return tokenData;
+}
+
+const payloadToAdaptCall = (payload: string, value: bigint = BigInt(0)) => {
+  return {
+    to: RELAY_ADAPT_ADDRESS,
+    data: payload,
+    value: value,
+  };
+}
+
+const getDummyTransactTx = (nullifiers: Uint8Array[]) => {
+  const nullG1Point = { x: 0, y: 0 };
+  const nullG2Point = { x: [0, 0], y: [0, 0] };
+
+  const nullSnarkProof = {
+    a: { ...nullG1Point },
+    b: { ...nullG2Point },
+    c: { ...nullG1Point },
+  };
+
+  const nullTokenData = {
+    tokenType: 0,
+    tokenAddress: "0x0000000000000000000000000000000000000000",
+    tokenSubID: 0,
+  };
+
+  const nullCommitmentCiphertext = {
+    ciphertext: [ "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "0x0000000000000000000000000000000000000000000000000000000000000000" ],
+    blindedSenderViewingKey: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    blindedReceiverViewingKey: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    annotationData: "0x",
+    memo: "0x",
+  };
+
+  const nullBoundParams = {
+    treeNumber: 0,
+    minGasPrice: 0,
+    unshield: 0,
+    chainID: 0,
+    adaptContract: "0x0000000000000000000000000000000000000000",
+    adaptParams: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    commitmentCiphertext: [],
+  };
+
+  const nullCommitmentPreimage = {
+    npk: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    token: { ...nullTokenData },
+    value: 0,
+  };
+
+ return {
+    proof: { ...nullSnarkProof },
+    merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    nullifiers: nullifiers,
+    commitments: [],
+    boundParams: { ...nullBoundParams },
+    unshieldPreimage: { ...nullCommitmentPreimage },
+  };
 }
 
 export default class RailgunAccount {
@@ -168,13 +232,25 @@ export default class RailgunAccount {
     return request;
   }
 
+  async createNativeShieldTx(value: bigint): Promise<ShieldRequestStruct> {
+    return this.createShieldTx(WETH, value);
+  }
+
   async submitShieldTx(shieldNote: ShieldRequestStruct, signer: Wallet): Promise<string> {
     const contract = new Contract(RAILGUN_ADDRESS, ABIRailgunSmartWallet, signer);
     const tx = await contract.shield([shieldNote]);
     return tx.hash;
   }
 
-  async createUnshieldTx(token: string, value: bigint, unshieldAddress: string, minGasPrice?: bigint): Promise<PublicInputs> {
+  async submitNativeShieldTx(shieldNote: ShieldRequestStruct, value: bigint, signer: Wallet): Promise<string> {
+    const contract = new Contract(RELAY_ADAPT_ADDRESS, ABIRelayAdapt, signer);
+    const payload1 = contract.interface.encodeFunctionData('wrapBase', [value]);
+    const payload2 = contract.interface.encodeFunctionData('shield', [[shieldNote]]);
+    const tx = await contract.multicall(true, [payloadToAdaptCall(payload1), payloadToAdaptCall(payload2)], {value: value});
+    return tx.hash;
+  }
+
+  async createUnshieldTx(token: string, value: bigint, receiver: string, minGasPrice: bigint = BigInt(0)): Promise<PublicInputs> {
     if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
@@ -204,20 +280,81 @@ export default class RailgunAccount {
       outputNotes.push(changeNote);
     }
 
-    outputNotes.push(new UnshieldNote(unshieldAddress, value, tokenData));
-
-    const txParams = await transact(
+    outputNotes.push(new UnshieldNote(receiver, value, tokenData));
+    return await transact(
       this.merkleTree,
-      minGasPrice ? minGasPrice : BigInt(0), // min gas price
+      minGasPrice,
       1, // unshield type
       CHAIN_ID,
-      '0x0000000000000000000000000000000000000000', // adapt contract
+      ZERO_ADDRESS, // adapt contract
       new Uint8Array([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]), // adapt params
       notesIn,
       outputNotes,
     );
+  }
 
-    return txParams;
+  async createNativeUnshieldTx(value: bigint, receiver: string, provider: JsonRpcProvider, minGasPrice: bigint = BigInt(0)) {
+    if (!this.noteBook || !this.merkleTree) {
+      throw new Error('not initialized');
+    }
+
+    const unspentNotes = await this.getUnspentNotes(WETH);
+    const allNotes = this.noteBook.notes;
+    let totalValue = 0n;
+    let notesIn: Note[] = [];
+    let nullifiers: Uint8Array[] = [];
+    for (const note of unspentNotes) {
+      totalValue += note.value;
+      notesIn.push(note);
+      nullifiers.push(await note.getNullifier(allNotes.indexOf(note)));
+      if (totalValue >= value) {
+        break;
+      }
+    }
+
+    if (totalValue < value) {
+      throw new Error('insufficient value in unspent notes');
+    }
+
+    const tokenData = getERC20TokenData(WETH);
+
+    const leftover = totalValue - value;
+    const outputNotes: (Note | UnshieldNote)[] = [];
+    if (leftover > 0n) { 
+      const changeNote = new Note(this.noteBook.spendingKey, this.noteBook.viewingKey, leftover, ByteUtils.hexStringToBytes(ByteUtils.randomHex(16)), tokenData, '');
+      outputNotes.push(changeNote);
+    }
+
+    outputNotes.push(new UnshieldNote(RELAY_ADAPT_ADDRESS, value, tokenData));
+    
+    const dummyTx = getDummyTransactTx(nullifiers);
+
+    const iface = new Interface(ABIRelayAdapt);
+    const reducedValue = value - (value * 25n / 10000n);
+    const payload1 = iface.encodeFunctionData('unwrapBase', [reducedValue]);
+    const payload2 = iface.encodeFunctionData('transfer', [[{token: {tokenType: 0, tokenAddress: ZERO_ADDRESS, tokenSubID: 0}, to: receiver, value: reducedValue}]]);
+    const actionData = {
+      random: "0x"+ ByteUtils.randomHex(31),
+      requireSuccess: true,
+      minGasLimit: minGasPrice,
+      calls: [payloadToAdaptCall(payload1), payloadToAdaptCall(payload2)],
+    }
+    
+    const contract = new Contract(RELAY_ADAPT_ADDRESS, ABIRelayAdapt, provider);
+    const relayAdaptParams = await contract.getAdaptParams([dummyTx], actionData);
+
+    const txParams = await transact(
+      this.merkleTree,
+      minGasPrice,
+      1, // unshield type
+      CHAIN_ID,
+      RELAY_ADAPT_ADDRESS,
+      relayAdaptParams,
+      notesIn,
+      outputNotes,
+    );
+
+    return {transact: txParams, action: actionData};
   }
 
   async submitTransactTx(inputs: PublicInputs[], signer: Wallet): Promise<string> {
@@ -226,7 +363,18 @@ export default class RailgunAccount {
     return tx.hash;
   }
 
-  async getBalance(token: string): Promise<bigint> {
+  async submitUnshieldTx(unshield: PublicInputs, signer: Wallet): Promise<string> {
+    return this.submitTransactTx([unshield], signer);
+  }
+
+  async submitNativeUnshieldTx(unshield: PublicInputs, postAction: any, signer: Wallet): Promise<string> {
+    const contract = new Contract(RELAY_ADAPT_ADDRESS, ABIRelayAdapt, signer);
+    const payload = contract.interface.encodeFunctionData('relay', [[unshield], postAction]);
+    const tx = await contract.multicall(true, [payloadToAdaptCall(payload)]);
+    return tx.hash;
+  }
+
+  async getBalance(token: string = WETH): Promise<bigint> {
     if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
@@ -234,19 +382,20 @@ export default class RailgunAccount {
     return this.noteBook.getBalance(this.merkleTree, tokenData);
   }
 
-  async getAllNotes(): Promise<Note[]> {
-    if (!this.noteBook || !this.merkleTree) {
-      throw new Error('not initialized');
-    }
-    return this.noteBook.notes;
-  }
-
   async getUnspentNotes(token: string): Promise<Note[]> {
     if (!this.noteBook || !this.merkleTree) {
       throw new Error('not initialized');
     }
     const tokenData = getERC20TokenData(token);
-    return this.noteBook.getUnspentNotes(this.merkleTree, tokenData);
+    const notes = await this.noteBook.getUnspentNotes(this.merkleTree, tokenData);
+    return notes;
+  }
+
+  getAllNotes(): Note[] {
+    if (!this.noteBook || !this.merkleTree) {
+      throw new Error('not initialized');
+    }
+    return this.noteBook.notes;
   }
 
   getMerkleRoot() {
