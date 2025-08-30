@@ -1,4 +1,4 @@
-import { RailgunAccount } from './account-utils';
+import { RailgunAccount, FEE_BASIS_POINTS } from './account-utils';
 import { ByteUtils } from './railgun-lib/utils/bytes';
 import dotenv from 'dotenv';
 import { Wallet, JsonRpcProvider } from 'ethers';
@@ -8,7 +8,7 @@ import { Cache } from './account-utils/railgun-account';
 
 // load environment variables from .env file
 dotenv.config();
-const MNEMONIC = process.env.MNEMONIC || 'test test test test test test test test test test test test';
+const MNEMONIC = process.env.MNEMONIC || 'test test test test test test test test test test test junk';
 const ACCOUNT_INDEX = Number(process.env.ACCOUNT_INDEX) || 0;
 const RPC_URL = process.env.RPC_URL || '';
 const TX_SIGNER_KEY = process.env.TX_SIGNER_KEY || '';
@@ -46,7 +46,7 @@ async function main() {
   // 4. create shield WETH tx data
   const encodedShieldNote = await railgunAccount.createNativeShieldTx(VALUE);
 
-  // 5. do shield tx(s)
+  // // 5. do shield tx(s)
   if (TX_SIGNER_KEY === '') {
     console.error("\nERROR: TX_SIGNER_KEY not set");
     process.exit(1);
@@ -67,7 +67,8 @@ async function main() {
   console.log("new root:", ByteUtils.hexlify(root2, true));
 
   // 7. create unshield tx data
-  const {transact, action} = await railgunAccount.createNativeUnshieldTx(VALUE/2n, txSigner.address, provider);
+  const reducedValue = VALUE - (VALUE * FEE_BASIS_POINTS / 10000n);
+  const {transact, action} = await railgunAccount.createNativeUnshieldTx(reducedValue, txSigner.address, provider);
 
   // 8. do unshield tx
   const unshieldTxHash = await railgunAccount.submitNativeUnshieldTx(transact, action, txSigner);
@@ -76,13 +77,14 @@ async function main() {
 
   // 9. refresh account, show new balance and merkle root
   await new Promise(resolve => setTimeout(resolve, 2000));
-  const toCache = await railgunAccount.sync(provider, lastSyncedBlock2);
+  await railgunAccount.sync(provider, lastSyncedBlock2);
   const balance3 = await railgunAccount.getBalance();
   console.log("new private WETH balance:", balance3);
   const root3 = railgunAccount.getMerkleRoot();
   console.log("new root:", ByteUtils.hexlify(root3, true));
-  
-  // if you want, save cache for faster syncing next time
+
+  // 10. If desired, save cache for faster syncing next time
+  // const toCache = await railgunAccount.sync(provider, 0, cached as unknown as Cache);
   // fs.writeFileSync('cached.json', JSON.stringify(toCache, null, 2));
 
   // exit (because prover hangs)

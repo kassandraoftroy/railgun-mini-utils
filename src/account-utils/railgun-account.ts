@@ -20,6 +20,7 @@ export const CHAIN_ID = BigInt(11155111);
 export const RELAY_ADAPT_ADDRESS = '0x66af65bfff9e384796a56f3fa3709b9d5d9d7083';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 export const WETH = '0x97a36608DA67AF0A79e50cb6343f86F340B3b49e';
+export const FEE_BASIS_POINTS = 25n;
 
 export interface Cache {
   receipts: TransactionReceipt[];
@@ -86,17 +87,6 @@ const getDummyTransactTx = (nullifiers: Uint8Array[]) => {
     tokenType: 0,
     tokenAddress: "0x0000000000000000000000000000000000000000",
     tokenSubID: 0,
-  };
-
-  const nullCommitmentCiphertext = {
-    ciphertext: [ "0x0000000000000000000000000000000000000000000000000000000000000000",
-                  "0x0000000000000000000000000000000000000000000000000000000000000000",
-                  "0x0000000000000000000000000000000000000000000000000000000000000000",
-                  "0x0000000000000000000000000000000000000000000000000000000000000000" ],
-    blindedSenderViewingKey: "0x0000000000000000000000000000000000000000000000000000000000000000",
-    blindedReceiverViewingKey: "0x0000000000000000000000000000000000000000000000000000000000000000",
-    annotationData: "0x",
-    memo: "0x",
   };
 
   const nullBoundParams = {
@@ -330,7 +320,7 @@ export default class RailgunAccount {
     const dummyTx = getDummyTransactTx(nullifiers);
 
     const iface = new Interface(ABIRelayAdapt);
-    const reducedValue = value - (value * 25n / 10000n);
+    const reducedValue = value - (value * FEE_BASIS_POINTS / 10000n);
     const payload1 = iface.encodeFunctionData('unwrapBase', [reducedValue]);
     const payload2 = iface.encodeFunctionData('transfer', [[{token: {tokenType: 0, tokenAddress: ZERO_ADDRESS, tokenSubID: 0}, to: receiver, value: reducedValue}]]);
     const actionData = {
