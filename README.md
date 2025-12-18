@@ -22,11 +22,3 @@ npm start
 ```
 
 runs a demo of end-to-end shield and unshield operations on sepolia testnet
-
-## Tests
-
-run
-
-```
-npm test
-```
