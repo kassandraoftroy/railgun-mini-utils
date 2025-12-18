@@ -16,6 +16,7 @@
     "@types/buffer-xor": "^2.0.2",
     "@types/chai": "^4.3.20",
     "@types/chai-as-promised": "^7.1.8",
+    "@types/circomlibjs": "^0.1.6",
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.1.0",
     "chai": "^4.5.0",
