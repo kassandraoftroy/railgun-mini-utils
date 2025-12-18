@@ -55,12 +55,12 @@ async function main() {
     batchStallTime: 0,
   });
 
-  if (!fs.existsSync('../demo/cache/')) {
-    fs.mkdirSync('../demo/cache/', { recursive: true });
+  if (!fs.existsSync('./demo/cache/')) {
+    fs.mkdirSync('./demo/cache/', { recursive: true });
   }
 
-  const publicCacheExists = fs.existsSync('../demo/cache/sepolia_public.json');
-  const public_cache = publicCacheExists ? JSON.parse(fs.readFileSync('../demo/cache/sepolia_public.json', 'utf8')) as PublicCache : sepolia_checkpoint as unknown as PublicCache;
+  const publicCacheExists = fs.existsSync('./demo/cache/sepolia_public.json');
+  const public_cache = publicCacheExists ? JSON.parse(fs.readFileSync('./demo/cache/sepolia_public.json', 'utf8')) as PublicCache : sepolia_checkpoint as unknown as PublicCache;
 
   console.log("\nresyncing railgun account...");
   console.log("    -> WARNING: can be slow (e.g. minutes) on first run without local cache...")
@@ -155,19 +155,19 @@ async function main() {
 
   // 13. save cache for faster syncing next time
   console.log('storing updated cache before exiting...');
-  const allLogs = Array.from(new Set(public_cache.logs.concat(newLogs)/*.concat(newLogs2).concat(newLogs3).concat(newLogs4)*/));
+  const allLogs = Array.from(new Set(public_cache.logs.concat(newLogs).concat(newLogs2).concat(newLogs3).concat(newLogs4)));
   const toCachePublic = {
     logs: allLogs,
     merkleTrees: railgunAccount.serializeMerkleTrees(),
     endBlock: endBlock,
   };
   
-  fs.writeFileSync('../demo/cache/sepolia_public.json', JSON.stringify(toCachePublic, null, 2));
+  fs.writeFileSync('./demo/cache/sepolia_public.json', JSON.stringify(toCachePublic, null, 2));
   const toCachePrivate = {
     noteBooks: railgunAccount.serializeNoteBooks(),
     endBlock: endBlock,
   };
-  fs.writeFileSync(`../demo/cache/sepolia_${zkAddress}.json`, JSON.stringify(toCachePrivate, null, 2));
+  fs.writeFileSync(`./demo/cache/sepolia_${zkAddress}.json`, JSON.stringify(toCachePrivate, null, 2));
 
   // exit (because prover hangs)
   setImmediate(() => process.exit(0));
